@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Full Operations Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { background-color: #1e1e2f; color: #ffffff; font-family: 'Courier New', Courier, monospace; }
+    .container { max-width: 1400px; margin: auto; padding: 20px; }
+    h1 { text-align: center; color: #00ffcc; text-transform: uppercase; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; margin-top: 20px; }
+    .card { background-color: #2b2b3c; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px #000; }
+    .card h2 { margin-top: 0; color: #ffa500; font-size: 1.1em; border-bottom: 1px solid #444; padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+    .value { font-size: 18px; font-weight: bold; }
+    .console { background-color: #111; border: 1px solid #333; border-radius: 5px; padding: 15px; height: 200px; overflow-y: auto; font-size: 0.9em; }
+    .console-line { margin-bottom: 5px; }
+    .console-user { color: #00ffcc; }
+    .console-ip { color: #f0ad4e; }
+    .console-time { color: #aaa; }
+    .warning-line { color: #d9534f; font-weight: bold; }
+    /* --- RESTORED: Styles for the pop-up alert modal --- */
+    #alert-modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.6); }
+    .modal-content { background-color: #d9534f; color: white; margin: 20% auto; padding: 30px; border: 1px solid #888; width: 80%; max-width: 500px; border-radius: 10px; text-align: center; font-size: 22px; }
+    .close-button { color: #fff; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+    <div id="alert-modal">
+      <div class="modal-content">
+        <span class="close-button" onclick="document.getElementById('alert-modal').style.display='none'">&times;</span>
+        <p id="alert-message">Critical System Alert!</p>
+      </div>
+    </div>
+
+    <h1>System Operations Dashboard</h1>
+
+    <div class="grid">
+        <div class="card">
+            <h2><span>CPU Usage</span> <span class="value" id="cpuValue">--%</span></h2>
+            <canvas id="cpuChart"></canvas>
+        </div>
+        <div class="card">
+            <h2><span>Memory Usage</span> <span class="value" id="memValue">--%</span></h2>
+            <canvas id="memChart"></canvas>
+        </div>
+        <div class="card">
+            <h2><span>Disk Usage</span> <span class="value" id="diskValue">--%</span></h2>
+            <canvas id="diskChart"></canvas>
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="card">
+            <h2>Authorities Login</h2>
+            <div class="console" id="authorities-console"></div>
+        </div>
+        <div class="card">
+            <h2>Server Warnings</h2>
+            <div class="console" id="warnings-console"></div>
+        </div>
+        <div class="card" style="text-align: center;">
+            <h2 style="justify-content: center;">Uptime</h2>
+            <div id="uptimeValue" style="font-size: 60px; font-weight: bold; color: #eee; padding-top: 30px;">--</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let isAlertActive = false;
+    const alertModal = document.getElementById('alert-modal');
+    const alertMessage = document.getElementById('alert-message');
+    
+    const CRITICAL_THRESHOLD = 80;
+    const WARNING_THRESHOLD = 60;
+
+    const NORMAL_COLOR = 'rgba(0, 255, 204, 0.5)';
+    const WARNING_COLOR = 'rgba(255, 165, 0, 0.5)';
+    const CRITICAL_COLOR = 'rgba(217, 83, 79, 0.5)';
+
+    function createChart(elementId) { const ctx = document.getElementById(elementId).getContext('2d'); return new Chart(ctx, { type: 'line', data: { labels: Array(20).fill(''), datasets: [{ label: 'Usage %', data: Array(20).fill(0), borderColor: NORMAL_COLOR, backgroundColor: NORMAL_COLOR, borderWidth: 2, fill: true, tension: 0.4 }] }, options: { scales: { y: { beginAtZero: true, max: 100 } }, plugins: { legend: { display: false } }, animation: { duration: 250 } } }); }
+   
+const cpuChart = createChart('cpuChart');
+const memChart = createChart('memChart');
+const diskChart = createChart('diskChart');
+    // WebSocket connection for real-time data
+const socket = new WebSocket("ws://localhost:3000");
+
+socket.onmessage = function(event) {
+
+  const msg = JSON.parse(event.data);
+
+  if(msg.type === "metrics"){
+
+      const latest = msg.data;
+
+      updateChart(cpuChart, document.getElementById('cpuValue'), latest.cpu, [latest.cpu]);
+      updateChart(memChart, document.getElementById('memValue'), latest.memory, [latest.memory]);
+      updateChart(diskChart, document.getElementById('diskValue'), latest.disk, [latest.disk]);
+
+      document.getElementById('uptimeValue').innerText = latest.uptime;
+  }
+
+};
+
+    function updateChart(chart, valueElement, value, history) {
+        valueElement.innerText = `${value}%`;
+        
+        let color = NORMAL_COLOR;
+        if (value >= CRITICAL_THRESHOLD) {
+            color = CRITICAL_COLOR;
+        } else if (value >= WARNING_THRESHOLD) {
+            color = WARNING_COLOR;
+        }
+        
+        valueElement.style.color = color.replace('0.5', '1');
+        chart.data.datasets[0].data = history.reverse();
+        chart.data.datasets[0].borderColor = color;
+        chart.data.datasets[0].backgroundColor = color;
+        chart.update();
+    }
+
+    async function fetchData() {
+      try {
+        const response = await fetch('http://localhost:3000/metrics');
+        if (!response.ok) return;
+        const history = await response.json();
+        if (history.length === 0) return;
+
+        const latest = history[0];
+        let isAnyMetricCritical = false;
+
+        updateChart(cpuChart, document.getElementById('cpuValue'), latest.cpu, history.map(h => h.cpu));
+        if (latest.cpu >= CRITICAL_THRESHOLD) isAnyMetricCritical = true;
+
+        updateChart(memChart, document.getElementById('memValue'), latest.memory, history.map(h => h.memory));
+        if (latest.memory >= CRITICAL_THRESHOLD) isAnyMetricCritical = true;
+        
+        updateChart(diskChart, document.getElementById('diskValue'), latest.disk, history.map(h => h.disk));
+        if (latest.disk >= CRITICAL_THRESHOLD) isAnyMetricCritical = true;
+        
+        document.getElementById('uptimeValue').innerText = latest.uptime;
+        const authConsole = document.getElementById('authorities-console');
+        authConsole.innerHTML = latest.users.map(u => `<div class="console-line"><span class="console-user">${u.user}</span> from <span class="console-ip">${u.ip}</span> | Login: <span class="console-time">${u.loginTime}</span> | Logout: <span class="console-time">${u.logoutTime}</span></div>`).join('');
+        const warnConsole = document.getElementById('warnings-console');
+        if (latest.warnings.length > 0) {
+            warnConsole.innerHTML = latest.warnings.map(w => `<div class="warning-line">!! ${w}</div>`).join('');
+        } else {
+            warnConsole.innerHTML = '<div style="color: #5cb85c;">All systems normal.</div>';
+        }
+
+        if (isAnyMetricCritical && !isAlertActive) {
+            alertMessage.innerText = `Critical System Alert! A metric has exceeded ${CRITICAL_THRESHOLD}%.`;
+            alertModal.style.display = 'block';
+            isAlertActive = true;
+        } else if (!isAnyMetricCritical) {
+            isAlertActive = false;
+        }
+
+      } catch (error) { console.error("Could not fetch data:", error); }
+    }
+
+    // --- UPDATED: This ensures fetchData() runs as soon as the page is ready ---
+    document.addEventListener('DOMContentLoaded', () => {
+        fetchData(); // Run immediately on page load
+        setInterval(fetchData, 5000); // Continue running every 5 seconds
+    });
+</script>
+</body>
+</html>
